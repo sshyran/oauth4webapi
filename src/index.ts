@@ -3717,3 +3717,144 @@ export async function calculateJwkThumbprint(key: CryptoKey) {
 
   return b64u(await crypto.subtle.digest('SHA-256', buf(JSON.stringify(components))))
 }
+
+export interface ClientRegistationParameters {
+  /**
+   * Time at which the client secret (if one was issued) will expire. 0 means it
+   * will not expire.
+   */
+  client_secret_expires_at?: number
+  /**
+   * Time at which the client identifier was issued.
+   */
+  client_id_issued_at?: number
+  /**
+   * The access token to be used at the client configuration endpoint to perform
+   * subsequent operations upon the client registration.
+   */
+  registration_access_token?: string
+  /**
+   * The fully qualified URL of the client configuration endpoint for the
+   * client.
+   */
+  registration_client_uri?: string
+
+  [metadata: string]: JsonValue | undefined
+}
+
+export async function clientRegistrationRequest(
+  as: AuthorizationServer,
+  client: Partial<Client>,
+  initialAccessToken?: string,
+  options?: ProtectedResourceRequestOptions,
+) {
+  assertIssuer(as)
+
+  if (typeof as.registration_endpoint !== 'string') {
+    throw new TypeError('"issuer.registration_endpoint" must be a string')
+  }
+
+  const url = new URL(as.registration_endpoint)
+
+  const headers = new Headers()
+  headers.set('accept', 'application/json')
+  headers.set('content-type', 'application/json')
+
+  if (initialAccessToken) {
+    return protectedResourceRequest(
+      initialAccessToken,
+      'POST',
+      url,
+      headers,
+      JSON.stringify(client),
+      options,
+    )
+  }
+
+  return fetch(url.href, {
+    body: JSON.stringify(client),
+    headers,
+    method: 'POST',
+    redirect: 'manual',
+    signal: options?.signal,
+  }).then(processDpopNonce)
+}
+
+export async function clientReadRequest(
+  registrationClientUri: URL,
+  registrationAccessToken: string,
+  options?: ProtectedResourceRequestOptions,
+) {
+  const headers = new Headers()
+  headers.set('accept', 'application/json')
+
+  return protectedResourceRequest(
+    registrationAccessToken,
+    'GET',
+    registrationClientUri,
+    headers,
+    undefined,
+    options,
+  )
+}
+
+export async function clientUpdateRequest(
+  registrationClientUri: URL,
+  registrationAccessToken: string,
+  client: Client,
+  options?: ProtectedResourceRequestOptions,
+) {
+  const headers = new Headers()
+  headers.set('accept', 'application/json')
+  headers.set('content-type', 'application/json')
+
+  return protectedResourceRequest(
+    registrationAccessToken,
+    'PUT',
+    registrationClientUri,
+    headers,
+    JSON.stringify(client),
+    options,
+  )
+}
+
+export async function clientDeleteRequest(
+  registrationClientUri: URL,
+  registrationAccessToken: string,
+  options?: ProtectedResourceRequestOptions,
+) {
+  const headers = new Headers()
+  headers.set('accept', 'application/json')
+
+  return protectedResourceRequest(
+    registrationAccessToken,
+    'DELETE',
+    registrationClientUri,
+    headers,
+    undefined,
+    options,
+  )
+}
+
+export async function processClientResponse(response: Response) {
+  if (!(response instanceof Response)) {
+    throw new TypeError('"response" must be an instance of Response')
+  }
+
+  if (response.status !== 200 && response.status !== 201 && response.status !== 204) {
+    throw new OPE('"response" is not a conform <> response')
+  }
+
+  let json: JsonValue
+  try {
+    json = await preserveBodyStream(response).json()
+  } catch {
+    throw new OPE('failed to parse "response" body as JSON')
+  }
+
+  if (!isJsonObject<Client & ClientRegistationParameters>(json)) {
+    throw new OPE('"response" body must be a top level object')
+  }
+
+  return json
+}
