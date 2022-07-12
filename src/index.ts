@@ -2165,9 +2165,11 @@ interface ParsedJWT {
 
 const claimNames = {
   aud: 'audience',
+  c_hash: 'code hash value',
   exp: 'expiration time',
   iat: 'issued at',
   iss: 'issuer',
+  nonce: 'nonce',
   sub: 'subject',
 }
 
@@ -2965,6 +2967,96 @@ export async function validateJwtAuthResponse(
       result.set(key, value)
     }
   }
+
+  return validateAuthResponse(as, client, result, expectedState)
+}
+
+/**
+ * Same as {@link validateAuthResponse} but for `code id_token` hybrid responses.
+ *
+ * @param as Authorization Server Metadata.
+ * @param client Client Metadata.
+ * @param parameters Authorization response parameters.
+ * @param expectedNonce Expected `nonce` parameter value.
+ * @param expectedState Expected `state` parameter value. Default is {@link expectNoState}.
+ *
+ * @returns Validated Authorization Response parameters or Authorization Error Response.
+ *
+ * @see TBD Core HybridFlowAuth
+ * @see TBD Multiple Response Types
+ */
+export async function validateCodeIdTokenResponse(
+  as: AuthorizationServer,
+  client: Client,
+  parameters: URLSearchParams,
+  expectedNonce: string,
+  expectedState?: string | typeof expectNoState | typeof skipStateCheck,
+  options?: HttpRequestOptions,
+): Promise<CallbackParameters | OAuth2Error> {
+  assertIssuer(as)
+  assertClient(client)
+
+  if (!(parameters instanceof URLSearchParams)) {
+    throw new TypeError('"parameters" must be an instance of URLSearchParams')
+  }
+
+  if (!validateString(expectedNonce)) {
+    throw new TypeError('"expectedNonce" must be a non-empty string')
+  }
+
+  if (typeof as.jwks_uri !== 'string') {
+    throw new TypeError('"issuer.jwks_uri" must be a string')
+  }
+
+  if (getURLSearchParameter(parameters, 'error')) {
+    return validateAuthResponse(as, client, parameters, expectedState)
+  }
+
+  const id_token = getURLSearchParameter(parameters, 'id_token')
+  const code = getURLSearchParameter(parameters, 'code')
+  if (!id_token || !code) {
+    throw new OPE('"parameters" does not contain a `code id_token` hybrid response')
+  }
+
+  const token = getURLSearchParameter(parameters, 'token')
+  if (token) {
+    throw new UnsupportedOperationError('`code id_token token` response type is not supported')
+  }
+
+  const { header, claims } = await validateJwt(
+    id_token,
+    checkSigningAlgorithm.bind(
+      undefined,
+      client.id_token_signed_response_alg,
+      as.id_token_signing_alg_values_supported,
+    ),
+    getPublicSigKeyFromIssuerJwksUri.bind(undefined, as, options),
+  )
+    .then(validatePresence.bind(undefined, ['aud', 'exp', 'iat', 'iss', 'sub', 'c_hash', 'nonce']))
+    .then(validateIssuer.bind(undefined, as.issuer))
+    .then(validateAudience.bind(undefined, client.client_id))
+
+  if (claims.nonce !== expectedNonce) {
+    throw new OPE('unexpected ID Token "nonce" claim value received')
+  }
+
+  if (
+    typeof claims.c_hash !== 'string' ||
+    !(await idTokenHashMatches(header.alg, code, claims.c_hash))
+  ) {
+    throw new OPE('unexpected ID Token "c_hash" claim value received')
+  }
+
+  if (Array.isArray(claims.aud) && claims.aud.length !== 1 && claims.azp !== client.client_id) {
+    throw new OPE('unexpected ID Token "azp" (authorized party)')
+  }
+
+  if (client.require_auth_time && typeof claims.auth_time !== 'number') {
+    throw new OPE('invalid ID Token "auth_time"')
+  }
+
+  const result = new URLSearchParams(parameters)
+  result.delete('id_token')
 
   return validateAuthResponse(as, client, result, expectedState)
 }
