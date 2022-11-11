@@ -102,7 +102,17 @@ export type ClientAuthenticationMethod =
  * }
  * ```
  */
-export type JWSAlgorithm = 'PS256' | 'ES256' | 'RS256' | 'EdDSA'
+export type JWSAlgorithm =
+  | 'EdDSA'
+  | 'ES256'
+  | 'PS256'
+  | 'RS256'
+  | 'ES384'
+  | 'PS384'
+  | 'RS384'
+  | 'ES512'
+  | 'PS512'
+  | 'RS512'
 
 /**
  * JSON Web Key
@@ -619,7 +629,18 @@ function isPublicKey(key: unknown): key is CryptoKey {
   return isCryptoKey(key) && key.type === 'public'
 }
 
-const SUPPORTED_JWS_ALGS: JWSAlgorithm[] = ['PS256', 'ES256', 'RS256', 'EdDSA']
+const SUPPORTED_JWS_ALGS: JWSAlgorithm[] = [
+  'PS256',
+  'ES256',
+  'RS256',
+  'PS384',
+  'ES384',
+  'RS384',
+  'PS512',
+  'ES512',
+  'RS512',
+  'EdDSA',
+]
 
 export interface HttpRequestOptions {
   /**
@@ -940,6 +961,10 @@ function psAlg(key: CryptoKey): JWSAlgorithm {
   switch ((<RsaHashedKeyAlgorithm>key.algorithm).hash.name) {
     case 'SHA-256':
       return 'PS256'
+    case 'SHA-384':
+      return 'PS384'
+    case 'SHA-512':
+      return 'PS512'
     default:
       throw new UnsupportedOperationError('unsupported RsaHashedKeyAlgorithm hash name')
   }
@@ -950,6 +975,10 @@ function rsAlg(key: CryptoKey): JWSAlgorithm {
   switch ((<RsaHashedKeyAlgorithm>key.algorithm).hash.name) {
     case 'SHA-256':
       return 'RS256'
+    case 'SHA-384':
+      return 'RS384'
+    case 'SHA-512':
+      return 'RS512'
     default:
       throw new UnsupportedOperationError('unsupported RsaHashedKeyAlgorithm hash name')
   }
@@ -960,6 +989,10 @@ function esAlg(key: CryptoKey): JWSAlgorithm {
   switch ((<EcKeyAlgorithm>key.algorithm).namedCurve) {
     case 'P-256':
       return 'ES256'
+    case 'P-384':
+      return 'ES384'
+    case 'P-521':
+      return 'ES512'
     default:
       throw new UnsupportedOperationError('unsupported EcKeyAlgorithm namedCurve')
   }
@@ -975,6 +1008,8 @@ function determineJWSAlgorithm(key: CryptoKey) {
     case 'ECDSA':
       return esAlg(key)
     case 'Ed25519':
+      return 'EdDSA'
+    case 'Ed448':
       return 'EdDSA'
     default:
       throw new UnsupportedOperationError('unsupported CryptoKey algorithm name')
@@ -1674,7 +1709,9 @@ async function getPublicSigKeyFromIssuerJwksUri(
     // filter keys based on alg-specific key requirements
     switch (true) {
       case alg === 'ES256' && jwk.crv !== 'P-256': // Fall through
-      case alg === 'EdDSA' && jwk.crv !== 'Ed25519':
+      case alg === 'ES384' && jwk.crv !== 'P-384': // Fall through
+      case alg === 'ES512' && jwk.crv !== 'P-521': // Fall through
+      case alg === 'EdDSA' && !(jwk.crv === 'Ed25519' || jwk.crv === 'Ed448'):
         return false
     }
 
@@ -2866,19 +2903,45 @@ function checkRsaKeyAlgorithm(algorithm: RsaHashedKeyAlgorithm) {
   }
 }
 
+function ecdsaHashName(algorithm: EcKeyAlgorithm) {
+  switch (algorithm.namedCurve) {
+    case 'P-256':
+      return 'SHA-256'
+    case 'P-384':
+      return 'SHA-384'
+    case 'P-521':
+      return 'SHA-512'
+    default:
+      throw new UnsupportedOperationError()
+  }
+}
+
 function subtleAlgorithm(key: CryptoKey): Algorithm | RsaPssParams | EcdsaParams {
   switch (key.algorithm.name) {
     case 'ECDSA':
-      return <EcdsaParams>{ name: key.algorithm.name, hash: { name: 'SHA-256' } }
-    case 'RSA-PSS':
-      checkRsaKeyAlgorithm(<RsaHashedKeyAlgorithm>key.algorithm)
-      return <RsaPssParams>{
+      return <EcdsaParams>{
         name: key.algorithm.name,
-        saltLength: 256 >> 3,
+        hash: { name: ecdsaHashName(<EcKeyAlgorithm>key.algorithm) },
       }
+    case 'RSA-PSS': {
+      checkRsaKeyAlgorithm(<RsaHashedKeyAlgorithm>key.algorithm)
+      switch ((<RsaHashedKeyAlgorithm>key.algorithm).hash.name) {
+        case 'SHA-256': // Fall through
+        case 'SHA-384': // Fall through
+        case 'SHA-512':
+          return <RsaPssParams>{
+            name: key.algorithm.name,
+            saltLength:
+              parseInt((<RsaHashedKeyAlgorithm>key.algorithm).hash.name.slice(-3), 10) >> 3,
+          }
+        default:
+          throw new UnsupportedOperationError()
+      }
+    }
     case 'RSASSA-PKCS1-v1_5':
       checkRsaKeyAlgorithm(<RsaHashedKeyAlgorithm>key.algorithm)
       return { name: key.algorithm.name }
+    case 'Ed448': // Fall through
     case 'Ed25519':
       return { name: key.algorithm.name }
   }
@@ -3211,18 +3274,34 @@ async function importJwk(jwk: JWK) {
   let algorithm: RsaHashedImportParams | EcKeyImportParams | Algorithm
 
   switch (alg) {
-    case 'PS256':
-      algorithm = { name: 'RSA-PSS', hash: { name: 'SHA-256' } }
+    case 'PS256': // Fall through
+    case 'PS384': // Fall through
+    case 'PS512':
+      algorithm = { name: 'RSA-PSS', hash: { name: `SHA-${alg.slice(-3)}` } }
       break
-    case 'RS256':
-      algorithm = { name: 'RSASSA-PKCS1-v1_5', hash: { name: 'SHA-256' } }
+    case 'RS256': // Fall through
+    case 'RS384': // Fall through
+    case 'RS512':
+      algorithm = { name: 'RSASSA-PKCS1-v1_5', hash: { name: `SHA-${alg.slice(-3)}` } }
       break
-    case 'ES256':
-      algorithm = { name: 'ECDSA', namedCurve: 'P-256' }
+    case 'ES256': // Fall through
+    case 'ES384':
+      algorithm = { name: 'ECDSA', namedCurve: `P-${alg.slice(-3)}` }
       break
-    case 'EdDSA':
-      algorithm = { name: 'Ed25519' }
+    case 'ES512':
+      algorithm = { name: 'ECDSA', namedCurve: 'P-521' }
       break
+    case 'EdDSA': {
+      switch (jwk.crv) {
+        case 'Ed25519': // Fall through
+        case 'Ed448':
+          algorithm = { name: jwk.crv }
+          break
+        default:
+          throw new UnsupportedOperationError()
+      }
+      break
+    }
     default:
       throw new UnsupportedOperationError()
   }
@@ -3432,6 +3511,9 @@ export interface GenerateKeyPairOptions {
 
   /** (RSA algorithms only) The length, in bits, of the RSA modulus. Default is `2048`. */
   modulusLength?: number
+
+  /** (EdDSA algorithms only) The EdDSA sub-type. Default is `Ed25519`. */
+  crv?: 'Ed25519' | 'Ed448'
 }
 
 /**
@@ -3447,28 +3529,47 @@ export async function generateKeyPair(alg: JWSAlgorithm, options?: GenerateKeyPa
   }
 
   switch (alg) {
-    case 'PS256':
+    case 'PS256': // Fall through
+    case 'PS384': // Fall through
+    case 'PS512':
       algorithm = {
         name: 'RSA-PSS',
-        hash: { name: 'SHA-256' },
+        hash: { name: `SHA-${alg.slice(-3)}` },
         modulusLength: options?.modulusLength ?? 2048,
         publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
       }
       break
-    case 'RS256':
+    case 'RS256': // Fall through
+    case 'RS384': // Fall through
+    case 'RS512':
       algorithm = {
         name: 'RSASSA-PKCS1-v1_5',
-        hash: { name: 'SHA-256' },
+        hash: { name: `SHA-${alg.slice(-3)}` },
         modulusLength: options?.modulusLength ?? 2048,
         publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
       }
       break
-    case 'ES256':
-      algorithm = { name: 'ECDSA', namedCurve: 'P-256' }
+    case 'ES256': // Fall through
+    case 'ES384':
+      algorithm = { name: 'ECDSA', namedCurve: `P-${alg.slice(-3)}` }
       break
-    case 'EdDSA':
-      algorithm = { name: 'Ed25519' }
+    case 'ES512':
+      algorithm = { name: 'ECDSA', namedCurve: 'P-521' }
       break
+    case 'EdDSA': {
+      switch (options?.crv) {
+        case undefined: // Fall through
+        case 'Ed25519':
+          algorithm = { name: 'Ed25519' }
+          break
+        case 'Ed448':
+          algorithm = { name: 'Ed448' }
+          break
+        default:
+          throw new UnsupportedOperationError()
+      }
+      break
+    }
     default:
       throw new UnsupportedOperationError()
   }

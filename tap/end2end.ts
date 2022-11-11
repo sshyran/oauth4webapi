@@ -9,6 +9,10 @@ export default (QUnit: QUnit) => {
   module('end2end.ts')
 
   for (const [alg, kp] of Object.entries(keys)) {
+    // TODO: https://gitlab.com/openid/conformance-suite/-/issues/1129
+    if (alg === 'ES384' || alg === 'ES512') {
+      continue
+    }
     const fapi = alg === 'EdDSA' || alg === 'ES256' || alg === 'PS256'
     const setup = fapi ? fapi2 : oidcc
     test(`${fapi ? 'FAPI 2.0' : 'OIDC Core 1.0'} ${alg}`, async (t) => {
