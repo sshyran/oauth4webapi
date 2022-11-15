@@ -1,5 +1,7 @@
 import * as fs from 'node:fs'
-import { EdgeRuntime } from 'edge-runtime'
+import { createRequire } from 'node:module'
+
+const { EdgeRuntime } = createRequire(import.meta.url)('edge-runtime')
 
 const script = fs.readFileSync('./tap/run-edge-runtime.js', { encoding: 'utf-8' })
 

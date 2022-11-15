@@ -75,6 +75,7 @@ jobs:
           cache: 'npm'
           check-latest: true
       - run: npm clean-install
+      - run: npm install --global edge-runtime
       - name: Run Test Suite
         run: npm run tap:edge-runtime
 

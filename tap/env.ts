@@ -24,7 +24,8 @@ export const isNode =
 export const isEdgeRuntime =
   // @ts-ignore
   typeof EdgeRuntime !== 'undefined'
-    ? `edge-runtime/${packageLock.packages['node_modules/edge-runtime'].version}`
+    ? // @ts-ignore
+      `edge-runtime/${EDGE_RUNTIME_VERSION}`
     : false
 
 export const isBrowser =
