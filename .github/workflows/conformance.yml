@@ -80,6 +80,11 @@ jobs:
               client_auth_type: client_secret_post
             plan: oidcc-client-test-plan
 
+          # client_secret_jwt
+          - variant:
+              client_auth_type: client_secret_jwt
+            plan: oidcc-client-test-plan
+
           # request_object
           - variant:
               request_type: request_object

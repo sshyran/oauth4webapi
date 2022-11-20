@@ -18,6 +18,7 @@ Recognized Client Metadata that have an effect on the exposed functionality.
 - [introspection\_signed\_response\_alg](Client.md#introspection_signed_response_alg)
 - [require\_auth\_time](Client.md#require_auth_time)
 - [token\_endpoint\_auth\_method](Client.md#token_endpoint_auth_method)
+- [token\_endpoint\_auth\_signing\_alg](Client.md#token_endpoint_auth_signing_alg)
 - [userinfo\_signed\_response\_alg](Client.md#userinfo_signed_response_alg)
 
 ## Properties
@@ -94,6 +95,16 @@ ___
 
 Client [authentication method](../types/ClientAuthenticationMethod.md) for the client's authenticated
 requests. Default is `client_secret_basic`.
+
+___
+
+### token\_endpoint\_auth\_signing\_alg
+
+• `Optional` **token\_endpoint\_auth\_signing\_alg**: `string`
+
+JWS `alg` algorithm that will be used for signing the `client_assertion` when
+[`client.token_endpoint_auth_method`](Client.md#token_endpoint_auth_method) is
+`client_secret_jwt`.
 
 ___
 

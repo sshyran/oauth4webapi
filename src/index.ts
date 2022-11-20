@@ -47,6 +47,10 @@ export interface PrivateKey {
  *   `client_assertion_type`, and `client_assertion` as `application/x-www-form-urlencoded` body
  *   parameters. The `client_assertion` is signed using a private key supplied as an
  *   {@link AuthenticatedRequestOptions.clientPrivateKey options parameter}.
+ * - **`client_secret_jwt`** uses the HTTP request body to send {@link Client.client_id `client_id`},
+ *   `client_assertion_type`, and `client_assertion` as `application/x-www-form-urlencoded` body
+ *   parameters. The `client_assertion` is signed using the
+ *   {@link Client.client_secret `client_secret`}.
  * - **`none`** (public client) uses the HTTP request body to send only
  *   {@link Client.client_id `client_id`} as `application/x-www-form-urlencoded` body parameter.
  *
@@ -57,6 +61,7 @@ export interface PrivateKey {
 export type ClientAuthenticationMethod =
   | 'client_secret_basic'
   | 'client_secret_post'
+  | 'client_secret_jwt'
   | 'private_key_jwt'
   | 'none'
 
@@ -440,6 +445,12 @@ export interface Client {
    * requests. Default is `client_secret_basic`.
    */
   token_endpoint_auth_method?: ClientAuthenticationMethod
+  /**
+   * JWS `alg` algorithm that will be used for signing the `client_assertion` when
+   * {@link Client.token_endpoint_auth_method `client.token_endpoint_auth_method`} is
+   * `client_secret_jwt`.
+   */
+  token_endpoint_auth_signing_alg?: string
   /**
    * JWS `alg` algorithm required for signing the ID Token issued to this Client. When not
    * configured the default is to allow only {@link JWSAlgorithm supported algorithms} listed in
@@ -1016,6 +1027,29 @@ async function privateKeyJwt(
   )
 }
 
+function isHmac(alg: unknown): alg is ClientSecretJWTHeaderParameters['alg'] {
+  return alg === 'HS256' || alg === 'HS384' || alg === 'HS512'
+}
+/**
+ * Generates a unique client assertion to be used in HS256 `client_secret_jwt` authenticated
+ * requests.
+ */
+async function clientSecretJwt(as: AuthorizationServer, client: Client, secret: string) {
+  const alg = isHmac(client.token_endpoint_auth_signing_alg)
+    ? client.token_endpoint_auth_signing_alg
+    : as.token_endpoint_auth_signing_alg_values_supported?.filter(isHmac).sort()[0] || 'HS256'
+
+  const key = await crypto.subtle.importKey(
+    'raw',
+    buf(secret),
+    { name: 'HMAC', hash: { name: `SHA-${alg.slice(-3)}` } },
+    false,
+    ['sign'],
+  )
+
+  return jwt({ alg }, clientAssertion(as, client), key)
+}
+
 function assertAs(as: AuthorizationServer): as is AuthorizationServer {
   if (typeof as !== 'object' || as === null) {
     throw new TypeError('"as" must be an object')
@@ -1091,6 +1125,16 @@ async function clientAuthentication(
       body.set('client_secret', assertClientSecret(client.client_secret))
       break
     }
+    case 'client_secret_jwt': {
+      assertNoClientPrivateKey('client_secret_jwt', clientPrivateKey)
+      body.set('client_id', client.client_id)
+      body.set('client_assertion_type', 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer')
+      body.set(
+        'client_assertion',
+        await clientSecretJwt(as, client, assertClientSecret(client.client_secret)),
+      )
+      break
+    }
     case 'private_key_jwt': {
       assertNoClientSecret('private_key_jwt', client.client_secret)
       if (clientPrivateKey === undefined) {
@@ -1120,7 +1164,7 @@ async function clientAuthentication(
 
 /** Minimal JWT sign() implementation. */
 async function jwt(
-  header: CompactJWSHeaderParameters,
+  header: CompactJWSHeaderParameters | ClientSecretJWTHeaderParameters,
   claimsSet: Record<string, unknown>,
   key: CryptoKey,
 ) {
@@ -2204,6 +2248,10 @@ export interface IDToken extends JWTPayload {
   readonly azp?: string
 }
 
+interface ClientSecretJWTHeaderParameters {
+  alg: 'HS256' | 'HS384' | 'HS512'
+}
+
 interface CompactJWSHeaderParameters {
   alg: JWSAlgorithm
   kid?: string
@@ -2880,6 +2928,8 @@ function subtleAlgorithm(key: CryptoKey): Algorithm | RsaPssParams | EcdsaParams
       checkRsaKeyAlgorithm(<RsaHashedKeyAlgorithm>key.algorithm)
       return { name: key.algorithm.name }
     case 'Ed25519':
+      return { name: key.algorithm.name }
+    case 'HMAC':
       return { name: key.algorithm.name }
   }
   throw new UnsupportedOperationError()
